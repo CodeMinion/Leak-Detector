@@ -10,13 +10,13 @@ const char* DEVICENAME = "Leak HP%X%X";
 const char* DEVICE_MODEL = "HomePi Motion";
 const char* DEVICE_MANUFACTURER = "Rounin Labs";
 
-/** 
- *  Home Environmental Sensing Service.
- * This service exposes measurement data from an home sensor intended for home automation applications. 
- * A wide range of environmental parameters is supported.
+/**
+    Home Environmental Sensing Service.
+   This service exposes measurement data from an home sensor intended for home automation applications.
+   A wide range of environmental parameters is supported.
  **/
 const int UUID16_SVC_HOME_ENV_SENSE = 0x28FF;
-const int UUID16_CHR_LEAK_SENSE_MEASUREMENT = 0x4A37;
+const int UUID16_CHR_LEAK_SENSE_MEASUREMENT = 0x4A38;
 
 const int VAL_LEAK_TOP = 0x01; // Leak detected by top probe
 const int VAL_LEAK_BOTTOM = 0x02; // Leak detected by bottom probe
@@ -33,31 +33,38 @@ BLEBas blebas;    // BAS (Battery Service) helper class instance
 const int BATTERY_INFO_PIN = A7;
 // Level at which to signal low battery
 const int LOW_BATT = 25;
-int lastBattLevel = 0;
+int lastBattLevel = 100;
 // Interval at which the battery is reported in MS
-const int BATT_REPORTING_INTERVAL = 1000; 
+const int BATT_REPORTING_INTERVAL = 1000;
 
 const int iLeakTopInterruptPin = A2;
 const int iLeakBottomInterruptPin = A3;
 
+const int SETUP_FLAG_TOP = 1;
+const int SETUP_FLAG_BOTTOM = 2;
+// Specify if the device is configured to detect leaks from above (top), below (bottom) or both.
+int selectedSetup = SETUP_FLAG_TOP; // SETUP_FLAG_TOP | SETUP_FLAG_BOTTOM
+
 /**
- * Notification task informaiton
- */
+   Notification task informaiton
+*/
 static TaskHandle_t _notifyLeakValueHandle;
+static TaskHandle_t _taskToNotify;
+
 uint32_t _notifyLeakValueStackSize = 512;
 void TaskNotifyLeak(void * pvParameters);
 
 
-void setup() 
+void setup()
 {
   Serial.begin(115200);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
 
   Serial.println("Setting up Leak Sensor");
-  Serial.println("-----------------------\n"); 
+  Serial.println("-----------------------\n");
 
   pinMode(STATUS_LED, OUTPUT);
- 
+
   // Initialise the Bluefruit module
   Serial.println("Initialise the Bluefruit nRF52 module");
   Bluefruit.begin();
@@ -70,7 +77,7 @@ void setup()
   uint8_t address [6];
   Bluefruit.Gap.getAddr(address);
   char nameBuff[50] = "";
-  sprintf(nameBuff, DEVICENAME, address[1],address[0]);
+  sprintf(nameBuff, DEVICENAME, address[1], address[0]);
   Serial.println(nameBuff);
   Bluefruit.setName(nameBuff);
 
@@ -94,7 +101,7 @@ void setup()
   Serial.println("Configuring the Leak Sensor Service");
   setupLS();
 
-   // Setup the advertising packet(s)
+  // Setup the advertising packet(s)
   Serial.println("Setting up the advertising payload(s)");
   startAdv();
   Serial.println("\nAdvertising");
@@ -155,17 +162,20 @@ void cccd_callback(BLECharacteristic& chr, uint16_t cccd_value)
 
   // Check the characteristic this CCCD update is associated with in case
   // this handler is used for multiple CCCD records.
-  if (chr.uuid == lsc.uuid) 
+  if (chr.uuid == lsc.uuid)
   {
-    if (chr.notifyEnabled()) 
+    if (chr.notifyEnabled())
     {
       Serial.println("Leak Sensing Measurement 'Notify' enabled");
-    } 
-    else 
+      // Notify current leak
+      notifyLeakDetectionValue(leakDetectedValue);
+    }
+    else
     {
       Serial.println("Leak Sensing Measurement 'Notify' disabled");
     }
   }
+      
 }
 
 void setupLS(void)
@@ -225,67 +235,84 @@ void startAdv(void)
 */
 void setupLeakSensor()
 {
-  //pinMode(iLeakTopInterruptPin, INPUT);
-  pinMode(iLeakBottomInterruptPin, INPUT);
+  if (selectedSetup & SETUP_FLAG_TOP)
+  {
+    pinMode(iLeakTopInterruptPin, INPUT);
+  }
+
+  if (selectedSetup & SETUP_FLAG_BOTTOM)
+  {
+    pinMode(iLeakBottomInterruptPin, INPUT);
+  }
 }
 
 void setupLeakDectectionInterrupts()
 {
-  attachInterrupt(digitalPinToInterrupt(iLeakTopInterruptPin), leakChanged, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(iLeakBottomInterruptPin), leakChanged, CHANGE);
+  if (selectedSetup & SETUP_FLAG_TOP)
+  {
+    attachInterrupt(digitalPinToInterrupt(iLeakTopInterruptPin), leakChanged, CHANGE);
+  }
+
+  if (selectedSetup & SETUP_FLAG_BOTTOM)
+  {
+    attachInterrupt(digitalPinToInterrupt(iLeakBottomInterruptPin), leakChanged, CHANGE);
+  }
 }
 
 /**
- * Interrupt function called when 
- * there is a change on the pins detecting a leak.
- */
+   Interrupt function called when
+   there is a change on the pins detecting a leak.
+*/
 void leakChanged()
 {
-  Serial.println("Leak Change");
 
+  BaseType_t xHigherPriorityTaskWoken;
+
+  /* Clear the interrupt. */
+  //prvClearInterruptSource();
   /*
-  BaseType_t yieldRequired;
+  NRF_GPIOTE->EVENTS_IN[0] = 0;
+  NRF_GPIOTE->EVENTS_IN[1] = 0;
+  NRF_GPIOTE->EVENTS_IN[2] = 0;
+  NRF_GPIOTE->EVENTS_IN[3] = 0;
+  NRF_GPIOTE->EVENTS_IN[4] = 0;
+  NRF_GPIOTE->EVENTS_IN[5] = 0;
+  NRF_GPIOTE->EVENTS_IN[6] = 0;
+  NRF_GPIOTE->EVENTS_IN[7] = 0;
+  */
 
-  yieldRequired = xTaskResumeFromISR(_notifyLeakValueHandle);
-
-  if(yieldRequired == pdTRUE)
-  {
-    taskYIELD();
-  }*/
-
-    BaseType_t xHigherPriorityTaskWoken;
-    /* Clear the interrupt. */
-    //prvClearInterruptSource();
-
-    /* xHigherPriorityTaskWoken must be initialised to pdFALSE.
+  // TODO: Either clear the interrupt or ensure only notification happens on 
+  // change so we don't bombard the remote device with updates of the 
+  // same value. 
+  /* xHigherPriorityTaskWoken must be initialised to pdFALSE.
     If calling vTaskNotifyGiveFromISR() unblocks the handling
     task, and the priority of the handling task is higher than
     the priority of the currently running task, then
     xHigherPriorityTaskWoken will be automatically set to pdTRUE. */
-    xHigherPriorityTaskWoken = pdFALSE;
+  xHigherPriorityTaskWoken = pdFALSE;
 
-    /* Unblock the handling task so the task can perform any processing
+  /* Unblock the handling task so the task can perform any processing
     necessitated by the interrupt.  xHandlingTask is the task's handle, which was
     obtained when the task was created.  vTaskNotifyGiveFromISR() also increments
     the receiving task's notification value. */
-    vTaskNotifyGiveFromISR( _notifyLeakValueHandle, &xHigherPriorityTaskWoken );
+  vTaskNotifyGiveFromISR( _notifyLeakValueHandle, &xHigherPriorityTaskWoken);
 
-    /* Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE.
+  /* Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE.
     The macro used to do this is dependent on the port and may be called
     portEND_SWITCHING_ISR. */
-    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+  portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
 }
 
 void setupNotificationTasks()
 {
   xTaskCreate(
     TaskNotifyLeak
-    ,(const portCHAR *)"NotifyLeak" // A name just for humans
+    , (const portCHAR *)"NotifyLeak" // A name just for humans
     , _notifyLeakValueStackSize // Stack Size
     , NULL // Parameters, should be address to variable on heap not stack.
-    , TASK_PRIO_LOW // priority
+    , TASK_PRIO_NORMAL //TASK_PRIO_LOW // priority
     , &_notifyLeakValueHandle
-    );
+  );
 }
 
 void TaskNotifyLeak(void * pvParameters)
@@ -296,79 +323,103 @@ void TaskNotifyLeak(void * pvParameters)
   for (;;)
   {
 
+    // Get the this task's handle.
+    //_taskToNotify = xTaskGetCurrentTaskHandle();
+    
     /* Block indefinitely (without a timeout, so no need to check the function's
         return value) to wait for a notification.  Here the RTOS task notification
         is being used as a binary semaphore, so the notification value is cleared
         to zero on exit.  NOTE!  Real applications should not block indefinitely,
         but instead time out occasionally in order to handle error conditions
         that may prevent the interrupt from sending any more notifications. */
-       ulNotifiedValue = ulTaskNotifyTake( pdTRUE,          /* Clear the notification value before
+    ulNotifiedValue = ulTaskNotifyTake( pdTRUE,          /* Clear the notification value before
                                            exiting. */
-                          portMAX_DELAY ); /* Block indefinitely. */
+                                        portMAX_DELAY ); /* Block indefinitely. */
 
-      /* ulNotifiedValue holds a count of the number of outstanding
-      interrupts.  Process each in turn. */
-      while( ulNotifiedValue > 0 )
-      {
-          
-        ulNotifiedValue--;
-        if(Bluefruit.connected())
-        {
-          Serial.println("Notifying Leak Data");
-          // Use this chance to update the battery value as well.
-          int batteryLevel = readBatteryLevel();
-          notifyBatteryLevel(batteryLevel);   
-    
-          if(batteryLevel < LOW_BATT)
-          {
-            digitalToggle(LED_RED);
-          }
-    
-          int topReading = digitalRead(iLeakTopInterruptPin) != HIGH ? 0x01 : 0x00;
-          int bottomReading = digitalRead(iLeakBottomInterruptPin) != HIGH ? 0x02 : 0x00;
-    
-          Serial.print("Top: "); Serial.println(topReading);
-          Serial.print("Bottom: "); Serial.println(bottomReading);
-          
-          int leakDetectionValue = topReading | bottomReading;
-          notifyLeakDetectionValue(leakDetectionValue);
-        }
-        else
-        {
-          digitalToggle(STATUS_LED);
-        }  
-  
-      }
+    Serial.println("Leak Task Notified");
         
+    /* ulNotifiedValue holds a count of the number of outstanding
+      interrupts.  Process each in turn. */
+    if ( ulNotifiedValue > 0 )
+    {
+      if (Bluefruit.connected())
+      {
+        Serial.println("Notifying Leak Data");
+        // Use this chance to update the battery value as well.
+        int batteryLevel = readBatteryLevel();
+        notifyBatteryLevel(batteryLevel);
+
+        if (batteryLevel < LOW_BATT)
+        {
+          digitalToggle(LED_RED);
+        }
+
+        int topReading = getLeakReadingTop();
+        int bottomReading = getLeakReadingBottom();
+
+        Serial.print("Top: "); Serial.println(topReading);
+        Serial.print("Bottom: "); Serial.println(bottomReading);
+
+        leakDetectedValue = topReading | bottomReading;
+        notifyLeakDetectionValue(leakDetectedValue);
+      }
+      else
+      {
+        digitalToggle(STATUS_LED);
+      }
+
+    }
+
     // The task suspends itself after notifying.
     //vTaskSuspend( NULL );
   }
-  
+
+}
+
+int getLeakReadingTop()
+{
+  int topReading = 0;
+
+  if (selectedSetup & SETUP_FLAG_TOP)
+  {
+    topReading = digitalRead(iLeakTopInterruptPin) != HIGH ? 0x01 : 0x00;
+  }
+  return topReading;
+}
+
+int getLeakReadingBottom()
+{
+  int bottomReading = 0;
+  if (selectedSetup & SETUP_FLAG_BOTTOM)
+  {
+    bottomReading = digitalRead(iLeakBottomInterruptPin) != HIGH ? 0x02 : 0x00;
+  }
+  return bottomReading;
 }
 
 void notifyLeakDetectionValue(int value)
 {
-   uint8_t leakData[1] = {value};
-   if(lsc.notify(leakData, sizeof(leakData)))
-   {
-      Serial.print("Leak Value Measurement updated to: ");
-      Serial.println(leakData[0]);
-   }
-   else
-   {
-      Serial.println("ERROR: Notify not set in the CCCD or not connected!");
-   }
-   
+  uint8_t leakData[1] = {value};
+  if (lsc.notify(leakData, sizeof(leakData)))
+  {
+    Serial.print("Leak Value Measurement updated to: ");
+    Serial.println(leakData[0]);
+  }
+  else
+  {
+    Serial.println("ERROR: Notify not set in the CCCD or not connected!");
+  }
+
 }
 
-void loop() 
+void loop()
 {
-  if(Bluefruit.connected() )
+  if (Bluefruit.connected() )
   {
     int batteryLevel = readBatteryLevel();
 
     // Notify the battery level only if it has changed.
-    if(batteryLevel != lastBattLevel)
+    if (batteryLevel != lastBattLevel)
     {
       notifyBatteryLevel(batteryLevel);
       lastBattLevel = batteryLevel;
@@ -376,7 +427,7 @@ void loop()
 
   }
 
-  // Only send update once per second
+  // Only send update every BATT_REPORTING_INTERVAL milliseconds
   delay(BATT_REPORTING_INTERVAL);
 
 }
@@ -389,14 +440,14 @@ void loop()
 */
 
 /**
- * Excerpt From https://github.com/adafruit/Adafruit_nRF52_Arduino/blob/master/libraries/Bluefruit52Lib/examples/Hardware/adc_vbat/adc_vbat.ino
- */
+   Excerpt From https://github.com/adafruit/Adafruit_nRF52_Arduino/blob/master/libraries/Bluefruit52Lib/examples/Hardware/adc_vbat/adc_vbat.ino
+*/
 #define VBAT_PIN          (A7)
 #define VBAT_MV_PER_LSB   (0.73242188F)   // 3.0V ADC range and 12-bit ADC resolution = 3000mV/4096
 #define VBAT_DIVIDER      (0.71275837F)   // 2M + 0.806M voltage divider on VBAT = (2M / (0.806M + 2M))
 #define VBAT_DIVIDER_COMP (1.403F)        // Compensation factor for the VBAT divider
 
-int readVBAT(void) 
+int readVBAT(void)
 {
   int raw;
 
@@ -420,47 +471,47 @@ int readVBAT(void)
 }
 
 uint8_t mvToPercent(float mvolts) {
-    uint8_t battery_level;
+  uint8_t battery_level;
 
-    if (mvolts >= 3000)
-    {
-        battery_level = 100;
-    }
-    else if (mvolts > 2900)
-    {
-        battery_level = 100 - ((3000 - mvolts) * 58) / 100;
-    }
-    else if (mvolts > 2740)
-    {
-        battery_level = 42 - ((2900 - mvolts) * 24) / 160;
-    }
-    else if (mvolts > 2440)
-    {
-        battery_level = 18 - ((2740 - mvolts) * 12) / 300;
-    }
-    else if (mvolts > 2100)
-    {
-        battery_level = 6 - ((2440 - mvolts) * 6) / 340;
-    }
-    else
-    {
-        battery_level = 0;
-    }
+  if (mvolts >= 3000)
+  {
+    battery_level = 100;
+  }
+  else if (mvolts > 2900)
+  {
+    battery_level = 100 - ((3000 - mvolts) * 58) / 100;
+  }
+  else if (mvolts > 2740)
+  {
+    battery_level = 42 - ((2900 - mvolts) * 24) / 160;
+  }
+  else if (mvolts > 2440)
+  {
+    battery_level = 18 - ((2740 - mvolts) * 12) / 300;
+  }
+  else if (mvolts > 2100)
+  {
+    battery_level = 6 - ((2440 - mvolts) * 6) / 340;
+  }
+  else
+  {
+    battery_level = 0;
+  }
 
-    return battery_level;
+  return battery_level;
 }
 
 int readBatteryLevel()
 {
   /*
-  float measuredvbat = analogRead(BATTERY_INFO_PIN);
-  measuredvbat *= 2;    // we divided by 2, so multiply back
-  measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
-  measuredvbat /= 1024; // convert to voltage
-  Serial.print("VBat: " ); Serial.println(measuredvbat);
-  Serial.print("CBat: " ); Serial.println(map(measuredvbat, 3.0, 4.2, 0, 100));
+    float measuredvbat = analogRead(BATTERY_INFO_PIN);
+    measuredvbat *= 2;    // we divided by 2, so multiply back
+    measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
+    measuredvbat /= 1024; // convert to voltage
+    Serial.print("VBat: " ); Serial.println(measuredvbat);
+    Serial.print("CBat: " ); Serial.println(map(measuredvbat, 3.0, 4.2, 0, 100));
   */
-   int vbat_raw = readVBAT();
+  int vbat_raw = readVBAT();
 
   // Convert from raw mv to percentage (based on LIPO chemistry)
   uint8_t vbat_per = mvToPercent(vbat_raw * VBAT_MV_PER_LSB);
