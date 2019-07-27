@@ -6,6 +6,19 @@
    Leak Sensing Char: 0x2A38
 */
 
+// Power Reduction: https://github.com/adafruit/Adafruit_nRF52_Arduino/issues/165
+// Serial seems to increase consumption by 500uA https://github.com/adafruit/Adafruit_nRF52_Arduino/issues/51#issuecomment-368289198
+//#define DEBUG
+
+#ifdef DEBUG
+  #define DEBUG_PRINT(x)  Serial.print(x)
+  #define DEBUG_PRINTLN(x)  Serial.println(x)
+#else
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x)
+#endif
+
+
 const char* DEVICENAME = "Leak HP%X%X";
 const char* DEVICE_MODEL = "HomePi Motion";
 const char* DEVICE_MANUFACTURER = "Rounin Labs";
@@ -57,28 +70,31 @@ void TaskNotifyLeak(void * pvParameters);
 
 void setup()
 {
+  
+  #ifdef DEBUG
   Serial.begin(115200);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
-
-  Serial.println("Setting up Leak Sensor");
-  Serial.println("-----------------------\n");
+  #endif
+  
+  DEBUG_PRINTLN("Setting up Leak Sensor");
+  DEBUG_PRINTLN("-----------------------\n");
 
   pinMode(STATUS_LED, OUTPUT);
 
   // Initialise the Bluefruit module
-  Serial.println("Initialise the Bluefruit nRF52 module");
+  DEBUG_PRINTLN("Initialise the Bluefruit nRF52 module");
   Bluefruit.begin();
 
   // We'll control the LED so we can save some power.
   //Bluefruit.autoConnLed(false);
 
   // Set the advertised device name (keep it short!)
-  Serial.print("Setting Device Name to ");
+  DEBUG_PRINT("Setting Device Name to ");
   uint8_t address [6];
   Bluefruit.Gap.getAddr(address);
   char nameBuff[50] = "";
   sprintf(nameBuff, DEVICENAME, address[1], address[0]);
-  Serial.println(nameBuff);
+  DEBUG_PRINTLN(nameBuff);
   Bluefruit.setName(nameBuff);
 
   // Set the connect/disconnect callback handlers
@@ -86,35 +102,35 @@ void setup()
   Bluefruit.setDisconnectCallback(disconnect_callback);
 
   // Configure and Start the Device Information Service
-  Serial.println("Configuring the Device Information Service");
+  DEBUG_PRINTLN("Configuring the Device Information Service");
   bledis.setManufacturer(DEVICE_MANUFACTURER);
   bledis.setModel(DEVICE_MODEL);
   bledis.begin();
 
   // Start the BLE Battery Service and set it to 100%
-  Serial.println("Configuring the Battery Service");
+  DEBUG_PRINTLN("Configuring the Battery Service");
   blebas.begin();
   blebas.write(100);
 
   // Setup the Heart Rate Monitor service using
   // BLEService and BLECharacteristic classes
-  Serial.println("Configuring the Leak Sensor Service");
+  DEBUG_PRINTLN("Configuring the Leak Sensor Service");
   setupLS();
 
   // Setup the advertising packet(s)
-  Serial.println("Setting up the advertising payload(s)");
+  DEBUG_PRINTLN("Setting up the advertising payload(s)");
   startAdv();
-  Serial.println("\nAdvertising");
+  DEBUG_PRINTLN("\nAdvertising");
 
   //Setup Motion Sensor.
   setupLeakSensor();
   setupLeakDectectionInterrupts();
 
   // Setup FreeRTOS notification tasks
-  Serial.println("Setting up FreeRTOS notification task(s)");
+  DEBUG_PRINTLN("Setting up FreeRTOS notification task(s)");
   setupNotificationTasks();
 
-  Serial.println("\nSetup Complete!");
+  DEBUG_PRINTLN("\nSetup Complete!");
 }
 
 void connect_callback(uint16_t conn_handle)
@@ -122,8 +138,8 @@ void connect_callback(uint16_t conn_handle)
   char central_name[32] = { 0 };
   Bluefruit.Gap.getPeerName(conn_handle, central_name, sizeof(central_name));
 
-  Serial.print("Connected to ");
-  Serial.println(central_name);
+  DEBUG_PRINT("Connected to ");
+  DEBUG_PRINTLN(central_name);
   // Disable the BT connection LED to save battery.
   digitalWrite(STATUS_LED, LOW);
 }
@@ -147,7 +163,7 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
   (void) conn_handle;
   (void) reason;
 
-  Serial.println("Disconnected");
+  DEBUG_PRINTLN("Disconnected");
 
   // Consider ligthing LED when it is disconnected.
 }
@@ -155,10 +171,10 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
 void cccd_callback(BLECharacteristic& chr, uint16_t cccd_value)
 {
   // Display the raw request packet
-  Serial.print("CCCD Updated: ");
+  DEBUG_PRINT("CCCD Updated: ");
   //Serial.printBuffer(request->data, request->len);
-  Serial.print(cccd_value);
-  Serial.println("");
+  DEBUG_PRINT(cccd_value);
+  DEBUG_PRINTLN("");
 
   // Check the characteristic this CCCD update is associated with in case
   // this handler is used for multiple CCCD records.
@@ -166,13 +182,13 @@ void cccd_callback(BLECharacteristic& chr, uint16_t cccd_value)
   {
     if (chr.notifyEnabled())
     {
-      Serial.println("Leak Sensing Measurement 'Notify' enabled");
+      DEBUG_PRINTLN("Leak Sensing Measurement 'Notify' enabled");
       // Notify current leak
       notifyLeakDetectionValue(leakDetectedValue);
     }
     else
     {
-      Serial.println("Leak Sensing Measurement 'Notify' disabled");
+      DEBUG_PRINTLN("Leak Sensing Measurement 'Notify' disabled");
     }
   }
       
@@ -336,7 +352,7 @@ void TaskNotifyLeak(void * pvParameters)
                                            exiting. */
                                         portMAX_DELAY ); /* Block indefinitely. */
 
-    Serial.println("Leak Task Notified");
+    DEBUG_PRINTLN("Leak Task Notified");
         
     /* ulNotifiedValue holds a count of the number of outstanding
       interrupts.  Process each in turn. */
@@ -344,7 +360,7 @@ void TaskNotifyLeak(void * pvParameters)
     {
       if (Bluefruit.connected())
       {
-        Serial.println("Notifying Leak Data");
+        DEBUG_PRINTLN("Notifying Leak Data");
         // Use this chance to update the battery value as well.
         int batteryLevel = readBatteryLevel();
         notifyBatteryLevel(batteryLevel);
@@ -357,8 +373,8 @@ void TaskNotifyLeak(void * pvParameters)
         int topReading = getLeakReadingTop();
         int bottomReading = getLeakReadingBottom();
 
-        Serial.print("Top: "); Serial.println(topReading);
-        Serial.print("Bottom: "); Serial.println(bottomReading);
+        DEBUG_PRINT("Top: "); DEBUG_PRINTLN(topReading);
+        DEBUG_PRINT("Bottom: "); DEBUG_PRINTLN(bottomReading);
 
         leakDetectedValue = topReading | bottomReading;
         notifyLeakDetectionValue(leakDetectedValue);
@@ -402,12 +418,12 @@ void notifyLeakDetectionValue(int value)
   uint8_t leakData[1] = {value};
   if (lsc.notify(leakData, sizeof(leakData)))
   {
-    Serial.print("Leak Value Measurement updated to: ");
-    Serial.println(leakData[0]);
+    DEBUG_PRINT("Leak Value Measurement updated to: ");
+    DEBUG_PRINTLN(leakData[0]);
   }
   else
   {
-    Serial.println("ERROR: Notify not set in the CCCD or not connected!");
+    DEBUG_PRINTLN("ERROR: Notify not set in the CCCD or not connected!");
   }
 
 }
@@ -508,13 +524,13 @@ int readBatteryLevel()
     measuredvbat *= 2;    // we divided by 2, so multiply back
     measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
     measuredvbat /= 1024; // convert to voltage
-    Serial.print("VBat: " ); Serial.println(measuredvbat);
-    Serial.print("CBat: " ); Serial.println(map(measuredvbat, 3.0, 4.2, 0, 100));
+    DEBUG_PRINT("VBat: " ); DEBUG_PRINTLN(measuredvbat);
+    DEBUG_PRINT("CBat: " ); DEBUG_PRINTLN(map(measuredvbat, 3.0, 4.2, 0, 100));
   */
   int vbat_raw = readVBAT();
 
   // Convert from raw mv to percentage (based on LIPO chemistry)
   uint8_t vbat_per = mvToPercent(vbat_raw * VBAT_MV_PER_LSB);
-  Serial.print("VBat: " ); Serial.print(vbat_per); Serial.println("%");
+  DEBUG_PRINT("VBat: " ); DEBUG_PRINT(vbat_per); DEBUG_PRINTLN("%");
   return vbat_per;
 }
