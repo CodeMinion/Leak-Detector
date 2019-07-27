@@ -8,7 +8,7 @@
 
 // Power Reduction: https://github.com/adafruit/Adafruit_nRF52_Arduino/issues/165
 // Serial seems to increase consumption by 500uA https://github.com/adafruit/Adafruit_nRF52_Arduino/issues/51#issuecomment-368289198
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
   #define DEBUG_PRINT(x)  Serial.print(x)
@@ -48,7 +48,7 @@ const int BATTERY_INFO_PIN = A7;
 const int LOW_BATT = 25;
 int lastBattLevel = 100;
 // Interval at which the battery is reported in MS
-const int BATT_REPORTING_INTERVAL = 1000;
+const int BATT_REPORTING_INTERVAL = 60000;
 
 const int iLeakTopInterruptPin = A2;
 const int iLeakBottomInterruptPin = A3;
@@ -86,7 +86,7 @@ void setup()
   Bluefruit.begin();
 
   // We'll control the LED so we can save some power.
-  //Bluefruit.autoConnLed(false);
+  Bluefruit.autoConnLed(false);
 
   // Set the advertised device name (keep it short!)
   DEBUG_PRINT("Setting Device Name to ");
