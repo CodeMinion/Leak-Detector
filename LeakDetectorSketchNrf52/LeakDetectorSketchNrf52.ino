@@ -381,7 +381,7 @@ void TaskNotifyLeak(void * pvParameters)
       }
       else
       {
-        digitalToggle(STATUS_LED);
+        //digitalToggle(STATUS_LED);
       }
 
     }
